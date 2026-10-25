@@ -166,4 +166,6 @@ make lint             # ruff check
 
 ## Демо
 
-![demo](https://asciinema.org/a/aMit9WsNEMqXugFu)
+[![asciicast](https://asciinema.org/a/aMit9WsNEMqXugFu)]
+
+Локальная запись: [`docs/demo.cast`](docs/demo.cast).
