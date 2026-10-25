@@ -3,19 +3,23 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from valutatrade_hub.core.currencies import Currency, get_currency, list_currencies
-from valutatrade_hub.core.exceptions import InsufficientFundsError
+from valutatrade_hub.core.currencies import (
+    Currency,
+    get_currency,
+    is_crypto,
+    list_currencies,
+)
+from valutatrade_hub.core.exceptions import ApiRequestError, InsufficientFundsError
 from valutatrade_hub.core.models import Portfolio, User
 from valutatrade_hub.core.utils import (
-    STUB_RATES,
     get_exchange_rate,
     parse_timestamp,
-    utc_now_iso,
     validate_amount,
 )
 from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.database import DatabaseManager
 from valutatrade_hub.infra.settings import SettingsLoader
+from valutatrade_hub.parser_service.updater import RatesUpdater, UpdateResult
 
 _db = DatabaseManager()
 _settings = SettingsLoader()
@@ -98,17 +102,12 @@ def _is_fresh(timestamp: str | None) -> bool:
 
 
 def _refresh_rates() -> dict[str, Any]:
-    """Обновляет кеш курсов (заглушка; в части 4 — Parser Service)."""
-    now = utc_now_iso()
-    cache = {
-        "pairs": {
-            pair: {"rate": rate, "updated_at": now, "source": "stub"}
-            for pair, rate in STUB_RATES.items()
-        },
-        "last_refresh": now,
-    }
-    _db.save_rates(cache)
-    return cache
+    """Кеш устарел → обновление через Parser Service; неудача → ApiRequestError."""
+    result = RatesUpdater().run_update()
+    if not result.updated:
+        reason = "; ".join(f"{src}: {err}" for src, err in result.errors.items())
+        raise ApiRequestError(reason or "курсы не получены")
+    return _db.load_rates()
 
 
 def _get_rates() -> tuple[dict[str, float], str | None]:
@@ -221,4 +220,56 @@ def sell(user_id: int, currency_code: str, amount: float) -> dict[str, Any]:
         "revenue": revenue,
         "before": before,
         "after": wallet.balance,
+    }
+
+# ---------- Parser Service ----------
+
+
+def update_rates(source: str | None = None) -> UpdateResult:
+    """Немедленное обновление курсов (все источники или один)."""
+    return RatesUpdater().run_update(source)
+
+
+def get_rates_snapshot(
+    currency: str | None = None,
+    top: int | None = None,
+    base: str | None = None,
+) -> dict[str, Any]:
+    """Курсы из локального кеша с фильтрами, без обращения к API."""
+    cache = _db.load_rates()
+    rates = {pair: info["rate"] for pair, info in cache["pairs"].items()}
+    if not rates:
+        raise ValueError(
+            "Локальный кеш курсов пуст. "
+            "Выполните 'update-rates', чтобы загрузить данные."
+        )
+    if top is not None and top <= 0:
+        raise ValueError("'top' должен быть положительным целым числом")
+
+    if base:
+        base_code = get_currency(base).code
+        codes = {code for pair in rates for code in pair.split("_")} - {base_code}
+        rows = {
+            f"{code}_{base_code}": get_exchange_rate(code, base_code, rates)
+            for code in codes
+        }
+    else:
+        rows = dict(rates)
+
+    if currency:
+        code = currency.strip().upper()
+        rows = {pair: rate for pair, rate in rows.items() if code in pair.split("_")}
+        if not rows:
+            raise ValueError(f"Курс для '{code}' не найден в кеше.")
+
+    if top is not None:
+        crypto = [(p, r) for p, r in rows.items() if is_crypto(p.split("_")[0])]
+        items = sorted(crypto, key=lambda item: item[1], reverse=True)[:top]
+    else:
+        items = sorted(rows.items())
+
+    return {
+        "rows": items,
+        "last_refresh": cache.get("last_refresh"),
+        "stale": not _is_fresh(cache.get("last_refresh")),
     }
