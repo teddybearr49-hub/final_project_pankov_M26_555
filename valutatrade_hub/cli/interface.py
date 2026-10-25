@@ -14,11 +14,16 @@ from valutatrade_hub.core.exceptions import (
 )
 from valutatrade_hub.core.models import User
 from valutatrade_hub.core.utils import format_amount, format_rate, format_timestamp
-from valutatrade_hub.logging_config import setup_logging
+from valutatrade_hub.logging_config import (
+    console_logging,
+    parser_log_hint,
+    setup_logging,
+)
 
 PROMPT = "> "
 WELCOME = "ValutaTrade Hub. Введите 'help' для списка команд, 'exit' — выход."
 SEPARATOR = "-" * 33
+SOURCES = ("coingecko", "exchangerate")
 
 COMMANDS_HELP = [
     ("register --username <имя> --password <пароль>", "Регистрация"),
@@ -27,6 +32,8 @@ COMMANDS_HELP = [
     ("buy --currency <код> --amount <кол-во>", "Покупка валюты"),
     ("sell --currency <код> --amount <кол-во>", "Продажа валюты"),
     ("get-rate --from <код> --to <код>", "Текущий курс"),
+    ("update-rates [--source coingecko|exchangerate]", "Обновить курсы из API"),
+    ("show-rates [--currency <код>] [--top N] [--base <код>]", "Курсы из кеша"),
     ("currencies", "Поддерживаемые валюты"),
     ("help", "Список команд"),
     ("exit", "Выход"),
@@ -66,6 +73,14 @@ def build_parser() -> SilentArgumentParser:
     cmd.add_argument("--from", dest="from_code", required=True)
     cmd.add_argument("--to", dest="to_code", required=True)
 
+    cmd = sub.add_parser("update-rates", add_help=False)
+    cmd.add_argument("--source", choices=SOURCES)
+
+    cmd = sub.add_parser("show-rates", add_help=False)
+    cmd.add_argument("--currency")
+    cmd.add_argument("--top", type=int)
+    cmd.add_argument("--base")
+
     for name in ("currencies", "help", "exit"):
         sub.add_parser(name, add_help=False)
     return parser
@@ -95,6 +110,8 @@ class ValutaTradeCLI:
             "buy": self._buy,
             "sell": self._sell,
             "get-rate": self._get_rate,
+            "update-rates": self._update_rates,
+            "show-rates": self._show_rates,
             "currencies": self._currencies,
             "help": self._help,
         }
@@ -129,7 +146,7 @@ class ValutaTradeCLI:
             print(f"Поддерживаемые валюты: {_supported_codes()}")
         except ApiRequestError as exc:
             print(f"{exc}. Повторите попытку позже или проверьте подключение к сети.")
-        except (ValutaTradeError, ValueError, TypeError) as exc:
+        except (ValutaTradeError, ValueError, TypeError, OSError) as exc:
             print(exc)
         return True
 
@@ -217,6 +234,27 @@ class ValutaTradeCLI:
             f"(обновлено: {format_timestamp(result['updated_at'])})"
         )
         print(f"Обратный курс {dst}→{src}: {format_rate(result['reverse_rate'])}")
+
+    def _update_rates(self, args: argparse.Namespace) -> None:
+        with console_logging():
+            result = usecases.update_rates(args.source)
+        if result.errors:
+            hint = parser_log_hint()
+            print(f"Update completed with errors. Check {hint} for details.")
+        else:
+            print(
+                f"Update successful. Total rates updated: {result.updated}. "
+                f"Last refresh: {result.last_refresh}"
+            )
+
+    def _show_rates(self, args: argparse.Namespace) -> None:
+        snapshot = usecases.get_rates_snapshot(args.currency, args.top, args.base)
+        updated = format_timestamp(snapshot["last_refresh"])
+        print(f"Rates from cache (updated at {updated}):")
+        for pair, rate in snapshot["rows"]:
+            print(f"- {pair}: {format_rate(rate)}")
+        if snapshot["stale"]:
+            print("Внимание: кеш устарел. Выполните 'update-rates'.")
 
     def _currencies(self, _args: argparse.Namespace) -> None:
         table = PrettyTable(["Код", "Описание"])
