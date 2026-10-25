@@ -48,6 +48,7 @@ class SilentArgumentParser(argparse.ArgumentParser):
     """ArgumentParser, который не завершает процесс при ошибке разбора."""
 
     def error(self, message: str) -> None:
+        """Бросает CliArgumentError вместо завершения процесса."""
         raise CliArgumentError(message)
 
 
@@ -117,6 +118,7 @@ class ValutaTradeCLI:
         }
 
     def run(self) -> None:
+        """Запускает интерактивный цикл ввода команд."""
         print(WELCOME)
         while True:
             try:

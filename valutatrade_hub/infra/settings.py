@@ -33,6 +33,7 @@ class SettingsLoader:
     _instance = None
 
     def __new__(cls) -> Self:
+        """Возвращает единственный экземпляр класса (Singleton)."""
         if cls._instance is None:
             instance = super().__new__(cls)
             instance._config = {}

@@ -62,10 +62,12 @@ class User:
 
     @property
     def user_id(self) -> int:
+        """Идентификатор пользователя."""
         return self._user_id
 
     @property
     def username(self) -> str:
+        """Имя пользователя."""
         return self._username
 
     @username.setter
@@ -76,14 +78,17 @@ class User:
 
     @property
     def hashed_password(self) -> str:
+        """Хеш пароля (SHA-256 с солью)."""
         return self._hashed_password
 
     @property
     def salt(self) -> str:
+        """Соль для хеширования пароля."""
         return self._salt
 
     @property
     def registration_date(self) -> datetime:
+        """Дата регистрации."""
         return self._registration_date
 
     def get_user_info(self) -> dict[str, Any]:
@@ -106,6 +111,7 @@ class User:
         return hmac.compare_digest(candidate, self._hashed_password)
 
     def to_dict(self) -> dict[str, Any]:
+        """Сериализует объект в словарь для JSON."""
         return {
             "user_id": self._user_id,
             "username": self._username,
@@ -116,6 +122,7 @@ class User:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
+        """Восстанавливает объект из словаря JSON."""
         return cls(
             user_id=data["user_id"],
             username=data["username"],
@@ -135,6 +142,7 @@ class Wallet:
 
     @property
     def balance(self) -> float:
+        """Текущий баланс кошелька."""
         return self._balance
 
     @balance.setter
@@ -157,13 +165,16 @@ class Wallet:
         self._balance -= amount
 
     def get_balance_info(self) -> str:
+        """Строка с кодом валюты и балансом."""
         return f"{self.currency_code}: {self._balance:.4f}"
 
     def to_dict(self) -> dict[str, Any]:
+        """Сериализует объект в словарь для JSON."""
         return {"currency_code": self.currency_code, "balance": self._balance}
 
     @classmethod
     def from_dict(cls, currency_code: str, data: dict[str, Any]) -> Self:
+        """Восстанавливает объект из словаря JSON."""
         return cls(currency_code, data.get("balance", 0.0))
 
 
@@ -182,6 +193,7 @@ class Portfolio:
 
     @property
     def user_id(self) -> int:
+        """Идентификатор пользователя."""
         return self._user_id
 
     @property
@@ -204,6 +216,7 @@ class Portfolio:
         return wallet
 
     def get_wallet(self, currency_code: str) -> Wallet | None:
+        """Кошелёк по коду валюты или None."""
         return self._wallets.get(validate_currency_code(currency_code))
 
     def get_total_value(
@@ -222,6 +235,7 @@ class Portfolio:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Сериализует объект в словарь для JSON."""
         return {
             "user_id": self._user_id,
             "wallets": {
@@ -231,6 +245,7 @@ class Portfolio:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], user: User | None = None) -> Self:
+        """Восстанавливает объект из словаря JSON."""
         wallets = {
             code: Wallet.from_dict(code, w)
             for code, w in data.get("wallets", {}).items()

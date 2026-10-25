@@ -25,6 +25,7 @@ def _log_dir_name() -> str:
 
 
 def get_log_dir() -> Path:
+    """Абсолютный путь к каталогу логов."""
     return PROJECT_ROOT / _log_dir_name()
 
 

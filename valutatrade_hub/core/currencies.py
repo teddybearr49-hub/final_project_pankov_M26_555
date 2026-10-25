@@ -41,6 +41,7 @@ class FiatCurrency(Currency):
         self.issuing_country = issuing_country
 
     def get_display_info(self) -> str:
+        """Строковое представление валюты для UI и логов."""
         return f"[FIAT] {self.code} — {self.name} (Issuing: {self.issuing_country})"
 
 
@@ -55,6 +56,7 @@ class CryptoCurrency(Currency):
         self.market_cap = float(market_cap)
 
     def get_display_info(self) -> str:
+        """Строковое представление валюты для UI и логов."""
         return (
             f"[CRYPTO] {self.code} — {self.name} "
             f"(Algo: {self.algorithm}, MCAP: {_short_sci(self.market_cap)})"
@@ -96,4 +98,5 @@ def list_currencies() -> list[Currency]:
 
 
 def is_crypto(code: str) -> bool:
+    """Проверяет, является ли код криптовалютой из реестра."""
     return isinstance(_REGISTRY.get(code), CryptoCurrency)

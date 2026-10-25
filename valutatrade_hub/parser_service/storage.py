@@ -15,6 +15,7 @@ class RatesStorage:
         self._db = DatabaseManager()
 
     def load_rates(self) -> dict[str, Any]:
+        """Читает кеш курсов rates.json."""
         data = self._db.read_json(self._config.RATES_FILE_PATH, {})
         if "pairs" not in data:
             return {"pairs": {}, "last_refresh": None}
@@ -36,6 +37,7 @@ class RatesStorage:
         self._db.write_json(self._config.RATES_FILE_PATH, cache)
 
     def load_history(self) -> list[dict[str, Any]]:
+        """Читает историю курсов exchange_rates.json."""
         return self._db.read_json(self._config.HISTORY_FILE_PATH, [])
 
     def append_history(self, records: list[dict[str, Any]]) -> int:

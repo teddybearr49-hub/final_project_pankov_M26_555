@@ -32,6 +32,7 @@ class RatesScheduler:
         self._running = False
 
     def run_forever(self) -> None:
+        """Циклически обновляет курсы до остановки."""
         self._running = True
         logger.info("Scheduler started, interval %d s", self._interval)
         while self._running:
@@ -49,10 +50,12 @@ class RatesScheduler:
             waited += TICK_SECONDS
 
     def stop(self) -> None:
+        """Останавливает планировщик."""
         self._running = False
 
 
 def main() -> None:
+    """Точка входа планировщика."""
     parser = argparse.ArgumentParser(description="Периодическое обновление курсов")
     parser.add_argument("--interval", type=int, help="интервал, секунды")
     args = parser.parse_args()

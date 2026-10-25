@@ -30,6 +30,7 @@ def _base_currency() -> str:
 
 
 def list_supported_currencies() -> list[Currency]:
+    """Список поддерживаемых валют."""
     return list_currencies()
 
 
