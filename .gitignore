@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Окружение и сборка
+.venv/
+dist/
+build/
+
+# Инструменты
+.ruff_cache/
+.vscode/
+
+# Логи и секреты
+logs/
+.env
