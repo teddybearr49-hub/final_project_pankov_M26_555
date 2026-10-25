@@ -1,13 +1,20 @@
-"""Вспомогательные функции: валидация и конвертация валют."""
+"""Вспомогательные функции: валидация, конвертация, форматирование."""
 
 import math
+from datetime import UTC, datetime
 
 BASE_CURRENCY = "USD"
 CURRENCY_CODE_MIN_LEN = 2
 CURRENCY_CODE_MAX_LEN = 5
 
+CRYPTO_CODES = frozenset({"BTC", "ETH", "SOL"})
+FIAT_DIGITS = 2
+CRYPTO_DIGITS = 4
+RATE_DIGITS = 2
+SMALL_RATE_DIGITS = 8
+
 # Заглушка курсов: 1 единица валюты = rate USD.
-# Будет заменена кешем data/rates.json после подключения Parser Service.
+# Заменится данными Parser Service.
 STUB_RATES: dict[str, float] = {
     "EUR_USD": 1.0786,
     "RUB_USD": 0.01016,
@@ -54,4 +61,37 @@ def get_exchange_rate(
         to_base = get_exchange_rate(from_code, BASE_CURRENCY, rates)
         from_base = get_exchange_rate(BASE_CURRENCY, to_code, rates)
         return to_base * from_base
-    raise ValueError(f"Курс {from_code}→{to_code} недоступен")
+    raise ValueError(
+        f"Курс {from_code}→{to_code} недоступен. Повторите попытку позже."
+    )
+
+
+def format_amount(value: float, code: str) -> str:
+    """Сумма: 4 знака для крипты, 2 для фиата, с разделителем тысяч."""
+    digits = CRYPTO_DIGITS if code in CRYPTO_CODES else FIAT_DIGITS
+    return f"{value:,.{digits}f}"
+
+
+def format_rate(rate: float) -> str:
+    """Курс: 8 знаков для малых значений, иначе 2."""
+    digits = RATE_DIGITS if rate >= 1 else SMALL_RATE_DIGITS
+    return f"{rate:.{digits}f}"
+
+
+def utc_now_iso() -> str:
+    """Текущее время UTC в ISO-формате с суффиксом Z."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    return now.isoformat().replace("+00:00", "Z")
+
+
+def parse_timestamp(value: str) -> datetime:
+    """ISO-строка → aware datetime (наивное время считается UTC)."""
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def format_timestamp(value: str | None) -> str:
+    """ISO-строка → 'YYYY-MM-DD HH:MM:SS'."""
+    if not value:
+        return "—"
+    return parse_timestamp(value).strftime("%Y-%m-%d %H:%M:%S")
