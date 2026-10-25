@@ -7,9 +7,14 @@ from collections.abc import Callable
 from prettytable import PrettyTable
 
 from valutatrade_hub.core import usecases
-from valutatrade_hub.core.exceptions import CurrencyNotFoundError, ValutaTradeError
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    ValutaTradeError,
+)
 from valutatrade_hub.core.models import User
 from valutatrade_hub.core.utils import format_amount, format_rate, format_timestamp
+from valutatrade_hub.logging_config import setup_logging
 
 PROMPT = "> "
 WELCOME = "ValutaTrade Hub. Введите 'help' для списка команд, 'exit' — выход."
@@ -22,6 +27,7 @@ COMMANDS_HELP = [
     ("buy --currency <код> --amount <кол-во>", "Покупка валюты"),
     ("sell --currency <код> --amount <кол-во>", "Продажа валюты"),
     ("get-rate --from <код> --to <код>", "Текущий курс"),
+    ("currencies", "Поддерживаемые валюты"),
     ("help", "Список команд"),
     ("exit", "Выход"),
 ]
@@ -60,8 +66,8 @@ def build_parser() -> SilentArgumentParser:
     cmd.add_argument("--from", dest="from_code", required=True)
     cmd.add_argument("--to", dest="to_code", required=True)
 
-    sub.add_parser("help", add_help=False)
-    sub.add_parser("exit", add_help=False)
+    for name in ("currencies", "help", "exit"):
+        sub.add_parser(name, add_help=False)
     return parser
 
 
@@ -70,6 +76,10 @@ def _parse_amount(raw: str) -> float:
         return float(raw.replace(",", "."))
     except ValueError:
         raise ValueError("'amount' должен быть положительным числом") from None
+
+
+def _supported_codes() -> str:
+    return ", ".join(c.code for c in usecases.list_supported_currencies())
 
 
 class ValutaTradeCLI:
@@ -85,6 +95,7 @@ class ValutaTradeCLI:
             "buy": self._buy,
             "sell": self._sell,
             "get-rate": self._get_rate,
+            "currencies": self._currencies,
             "help": self._help,
         }
 
@@ -113,6 +124,11 @@ class ValutaTradeCLI:
             return True
         try:
             self._handlers[args.command](args)
+        except CurrencyNotFoundError as exc:
+            print(exc)
+            print(f"Поддерживаемые валюты: {_supported_codes()}")
+        except ApiRequestError as exc:
+            print(f"{exc}. Повторите попытку позже или проверьте подключение к сети.")
         except (ValutaTradeError, ValueError, TypeError) as exc:
             print(exc)
         return True
@@ -194,17 +210,20 @@ class ValutaTradeCLI:
             )
 
     def _get_rate(self, args: argparse.Namespace) -> None:
-        try:
-            result = usecases.get_rate(args.from_code, args.to_code)
-        except CurrencyNotFoundError as exc:
-            print(f"{exc}. Пример: get-rate --from USD --to BTC")
-            return
+        result = usecases.get_rate(args.from_code, args.to_code)
         src, dst = result["from"], result["to"]
         print(
             f"Курс {src}→{dst}: {format_rate(result['rate'])} "
             f"(обновлено: {format_timestamp(result['updated_at'])})"
         )
         print(f"Обратный курс {dst}→{src}: {format_rate(result['reverse_rate'])}")
+
+    def _currencies(self, _args: argparse.Namespace) -> None:
+        table = PrettyTable(["Код", "Описание"])
+        table.align = "l"
+        for currency in usecases.list_supported_currencies():
+            table.add_row([currency.code, currency.get_display_info()])
+        print(table)
 
     def _help(self, _args: argparse.Namespace) -> None:
         table = PrettyTable(["Команда", "Описание"])
@@ -216,6 +235,7 @@ class ValutaTradeCLI:
 
 def main() -> None:
     """Точка входа CLI."""
+    setup_logging()
     ValutaTradeCLI().run()
 
 

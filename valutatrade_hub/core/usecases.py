@@ -3,10 +3,8 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from valutatrade_hub.core.exceptions import (
-    CurrencyNotFoundError,
-    InsufficientFundsError,
-)
+from valutatrade_hub.core.currencies import Currency, get_currency, list_currencies
+from valutatrade_hub.core.exceptions import InsufficientFundsError
 from valutatrade_hub.core.models import Portfolio, User
 from valutatrade_hub.core.utils import (
     STUB_RATES,
@@ -14,8 +12,8 @@ from valutatrade_hub.core.utils import (
     parse_timestamp,
     utc_now_iso,
     validate_amount,
-    validate_currency_code,
 )
+from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.database import DatabaseManager
 from valutatrade_hub.infra.settings import SettingsLoader
 
@@ -27,9 +25,14 @@ def _base_currency() -> str:
     return _settings.get("default_base_currency", "USD")
 
 
+def list_supported_currencies() -> list[Currency]:
+    return list_currencies()
+
+
 # ---------- Пользователи ----------
 
 
+@log_action("REGISTER")
 def register_user(username: str, password: str) -> User:
     """Регистрирует пользователя и создаёт ему пустой портфель."""
     username = username.strip()
@@ -48,6 +51,7 @@ def register_user(username: str, password: str) -> User:
     return user
 
 
+@log_action("LOGIN")
 def login_user(username: str, password: str) -> User:
     """Проверяет логин и пароль, возвращает пользователя."""
     record = next(
@@ -72,6 +76,7 @@ def _load_portfolio(user_id: int) -> Portfolio:
 
 
 def _save_portfolio(portfolio: Portfolio) -> None:
+    """Безопасная операция: чтение → модификация → атомарная запись."""
     records = _db.load_portfolios()
     for index, record in enumerate(records):
         if record["user_id"] == portfolio.user_id:
@@ -93,7 +98,7 @@ def _is_fresh(timestamp: str | None) -> bool:
 
 
 def _refresh_rates() -> dict[str, Any]:
-    """Обновляет кеш курсов (заглушка до подключения Parser Service)."""
+    """Обновляет кеш курсов (заглушка; в части 4 — Parser Service)."""
     now = utc_now_iso()
     cache = {
         "pairs": {
@@ -107,7 +112,7 @@ def _refresh_rates() -> dict[str, Any]:
 
 
 def _get_rates() -> tuple[dict[str, float], str | None]:
-    """Курсы из кеша rates.json; устаревший кеш обновляется."""
+    """Курсы из кеша rates.json; устаревший по TTL кеш обновляется."""
     cache = _db.load_rates()
     if not _is_fresh(cache.get("last_refresh")):
         cache = _refresh_rates()
@@ -115,22 +120,11 @@ def _get_rates() -> tuple[dict[str, float], str | None]:
     return rates, cache.get("last_refresh")
 
 
-def _known_codes(rates: dict[str, float]) -> set[str]:
-    codes = {_base_currency()}
-    for pair in rates:
-        codes.update(pair.split("_"))
-    return codes
-
-
 def get_rate(from_code: str, to_code: str) -> dict[str, Any]:
     """Курс from→to, обратный курс и время обновления."""
-    src = validate_currency_code(from_code)
-    dst = validate_currency_code(to_code)
+    src = get_currency(from_code).code
+    dst = get_currency(to_code).code
     rates, updated_at = _get_rates()
-    known = _known_codes(rates)
-    for code in (src, dst):
-        if code not in known:
-            raise CurrencyNotFoundError(code)
     rate = get_exchange_rate(src, dst, rates)
     return {
         "from": src,
@@ -148,10 +142,8 @@ def get_portfolio_report(
     user_id: int, base_currency: str | None = None
 ) -> dict[str, Any]:
     """Кошельки пользователя и их стоимость в базовой валюте."""
-    base = validate_currency_code(base_currency or _base_currency())
+    base = get_currency(base_currency or _base_currency()).code
     rates, _ = _get_rates()
-    if base not in _known_codes(rates):
-        raise CurrencyNotFoundError(base)
     portfolio = _load_portfolio(user_id)
     rows = [
         {
@@ -168,9 +160,10 @@ def get_portfolio_report(
     }
 
 
+@log_action("BUY", verbose=True)
 def buy(user_id: int, currency_code: str, amount: float) -> dict[str, Any]:
     """Покупка валюты за базовую (USD); покупка USD — пополнение."""
-    code = validate_currency_code(currency_code)
+    code = get_currency(currency_code).code
     amount = validate_amount(amount)
     base = _base_currency()
     portfolio = _load_portfolio(user_id)
@@ -198,9 +191,10 @@ def buy(user_id: int, currency_code: str, amount: float) -> dict[str, Any]:
     }
 
 
+@log_action("SELL", verbose=True)
 def sell(user_id: int, currency_code: str, amount: float) -> dict[str, Any]:
     """Продажа валюты; выручка зачисляется на кошелёк базовой валюты."""
-    code = validate_currency_code(currency_code)
+    code = get_currency(currency_code).code
     amount = validate_amount(amount)
     base = _base_currency()
     portfolio = _load_portfolio(user_id)
