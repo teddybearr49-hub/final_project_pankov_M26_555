@@ -7,7 +7,14 @@ BASE_CURRENCY = "USD"
 CURRENCY_CODE_MIN_LEN = 2
 CURRENCY_CODE_MAX_LEN = 5
 
-CRYPTO_CODES = frozenset({"BTC", "ETH", "SOL"})
+STUB_RATES: dict[str, float] = {
+    "EUR_USD": 1.0786,
+    "GBP_USD": 1.2650,
+    "RUB_USD": 0.01016,
+    "BTC_USD": 59337.21,
+    "ETH_USD": 3720.00,
+    "SOL_USD": 145.12,
+}
 FIAT_DIGITS = 2
 CRYPTO_DIGITS = 4
 RATE_DIGITS = 2
@@ -68,7 +75,9 @@ def get_exchange_rate(
 
 def format_amount(value: float, code: str) -> str:
     """Сумма: 4 знака для крипты, 2 для фиата, с разделителем тысяч."""
-    digits = CRYPTO_DIGITS if code in CRYPTO_CODES else FIAT_DIGITS
+    from valutatrade_hub.core.currencies import is_crypto
+
+    digits = CRYPTO_DIGITS if is_crypto(code) else FIAT_DIGITS
     return f"{value:,.{digits}f}"
 
 
