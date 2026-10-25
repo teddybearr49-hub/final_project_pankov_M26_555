@@ -1,8 +1,11 @@
 """Командный интерфейс ValutaTrade Hub (интерактивный режим)."""
 
 import argparse
+import os
 import shlex
+import sys
 from collections.abc import Callable
+from typing import Any
 
 from prettytable import PrettyTable
 
@@ -23,8 +26,16 @@ from valutatrade_hub.logging_config import (
 
 PROMPT = "> "
 WELCOME = "ValutaTrade Hub. Введите 'help' для списка команд, 'exit' — выход."
-SEPARATOR = "-" * 33
 SOURCES = ("coingecko", "exchangerate")
+CANCELLED_MESSAGE = "Операция отменена."
+
+GREEN = "\033[32m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+CYAN = "\033[36m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+USE_COLOR = sys.stdout.isatty() and "NO_COLOR" not in os.environ
 
 COMMANDS_HELP = [
     ("register --username <имя> --password <пароль>", "Регистрация"),
@@ -39,6 +50,48 @@ COMMANDS_HELP = [
     ("help", "Список команд"),
     ("exit", "Выход"),
 ]
+
+
+# ---------- оформление вывода ----------
+
+
+def _paint(text: str, color: str) -> str:
+    return f"{color}{text}{RESET}" if USE_COLOR else text
+
+
+def _success(text: str) -> None:
+    print(_paint(text, GREEN))
+
+
+def _error(text: str) -> None:
+    print(_paint(text, RED))
+
+
+def _warn(text: str) -> None:
+    print(_paint(text, YELLOW))
+
+
+def _enable_ansi_on_windows() -> None:
+    if os.name == "nt":
+        os.system("")  # включает обработку ANSI-цветов в консоли Windows
+
+
+def _print_trade(verb: str, result: dict[str, Any], total_key: str, label: str) -> None:
+    code, base = result["currency"], result["base"]
+    line = f"{verb} выполнена: {format_amount(result['amount'], code)} {code}"
+    if code != base:
+        line += f" по курсу {format_rate(result['rate'])} {base}/{code}"
+    _success(line)
+    print("Изменения в портфеле:")
+    print(
+        f"- {code}: было {format_amount(result['before'], code)} → "
+        f"стало {format_amount(result['after'], code)}"
+    )
+    if code != base:
+        print(f"{label}: {format_amount(result[total_key], base)} {base}")
+
+
+# ---------- разбор команд ----------
 
 
 class CliArgumentError(Exception):
@@ -99,7 +152,8 @@ def _parse_amount(raw: str) -> float:
 def _supported_codes() -> str:
     return ", ".join(c.code for c in usecases.list_supported_currencies())
 
-CANCELLED_MESSAGE = "Операция отменена."
+
+# ---------- подтверждение операций ----------
 
 
 def _trade_question(verb: str, currency_code: str, amount: float) -> str:
@@ -122,6 +176,10 @@ def _sell_question(_user_id: int, currency_code: str, amount: float) -> str:
 confirmed_buy = confirm_action(_buy_question)(usecases.buy)
 confirmed_sell = confirm_action(_sell_question)(usecases.sell)
 
+
+# ---------- оболочка ----------
+
+
 class ValutaTradeCLI:
     """Интерактивная оболочка: разбирает команды и вызывает usecases."""
 
@@ -143,11 +201,11 @@ class ValutaTradeCLI:
 
     def run(self) -> None:
         """Запускает интерактивный цикл ввода команд."""
-        print(WELCOME)
+        print(_paint(WELCOME, BOLD))
         while True:
+            user = self._current_user
+            prompt = f"{_paint(user.username, CYAN)}{PROMPT}" if user else PROMPT
             try:
-                user = self._current_user
-                prompt = f"{user.username}{PROMPT}" if user else PROMPT
                 line = input(prompt).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
@@ -160,22 +218,22 @@ class ValutaTradeCLI:
         try:
             args = self._parser.parse_args(shlex.split(line))
         except (CliArgumentError, ValueError) as exc:
-            print(f"Ошибка ввода: {exc}")
+            _error(f"Ошибка ввода: {exc}")
             return True
         if args.command == "exit":
             return False
         if args.command is None:
-            print("Введите команду. Список команд: help")
+            _warn("Введите команду. Список команд: help")
             return True
         try:
             self._handlers[args.command](args)
         except CurrencyNotFoundError as exc:
-            print(exc)
+            _error(str(exc))
             print(f"Поддерживаемые валюты: {_supported_codes()}")
         except ApiRequestError as exc:
-            print(f"{exc}. Повторите попытку позже или проверьте подключение к сети.")
+            _error(f"{exc}. Повторите попытку позже или проверьте подключение к сети.")
         except (ValutaTradeError, ValueError, TypeError, OSError) as exc:
-            print(exc)
+            _error(str(exc))
         return True
 
     def _require_login(self) -> User:
@@ -187,86 +245,66 @@ class ValutaTradeCLI:
 
     def _register(self, args: argparse.Namespace) -> None:
         user = usecases.register_user(args.username, args.password)
-        print(
+        _success(
             f"Пользователь '{user.username}' зарегистрирован (id={user.user_id}). "
             f"Войдите: login --username {user.username} --password ****"
         )
 
     def _login(self, args: argparse.Namespace) -> None:
         self._current_user = usecases.login_user(args.username, args.password)
-        print(f"Вы вошли как '{self._current_user.username}'")
+        _success(f"Вы вошли как '{self._current_user.username}'")
 
     def _show_portfolio(self, args: argparse.Namespace) -> None:
         user = self._require_login()
         try:
             report = usecases.get_portfolio_report(user.user_id, args.base)
         except CurrencyNotFoundError as exc:
-            print(f"Неизвестная базовая валюта '{exc.code}'")
+            _error(f"Неизвестная базовая валюта '{exc.code}'")
             return
         base = report["base"]
         if not report["rows"]:
-            print("Портфель пуст. Купите валюту: buy --currency <код> --amount <N>")
+            _warn("Портфель пуст. Купите валюту: buy --currency <код> --amount <N>")
             return
-        print(f"Портфель пользователя '{user.username}' (база: {base}):")
+        print(_paint(f"Портфель пользователя '{user.username}' (база: {base}):", BOLD))
+        table = PrettyTable(["Валюта", "Баланс", f"Стоимость, {base}"])
+        table.align = "r"
+        table.align["Валюта"] = "l"
         for row in report["rows"]:
             code = row["code"]
-            print(
-                f"- {code}: {format_amount(row['balance'], code)}  → "
-                f"{format_amount(row['value'], base)} {base}"
+            table.add_row(
+                [
+                    code,
+                    format_amount(row["balance"], code),
+                    format_amount(row["value"], base),
+                ]
             )
-        print(SEPARATOR)
-        print(f"ИТОГО: {format_amount(report['total'], base)} {base}")
+        print(table)
+        print(_paint(f"ИТОГО: {format_amount(report['total'], base)} {base}", BOLD))
 
     def _buy(self, args: argparse.Namespace) -> None:
         user = self._require_login()
         operation = usecases.buy if args.yes else confirmed_buy
         result = operation(user.user_id, args.currency, _parse_amount(args.amount))
         if result is None:
-            print(CANCELLED_MESSAGE)
+            _warn(CANCELLED_MESSAGE)
             return
-        code, base = result["currency"], result["base"]
-        line = f"Покупка выполнена: {format_amount(result['amount'], code)} {code}"
-        if code != base:
-            line += f" по курсу {format_rate(result['rate'])} {base}/{code}"
-        print(line)
-        print("Изменения в портфеле:")
-        print(
-            f"- {code}: было {format_amount(result['before'], code)} → "
-            f"стало {format_amount(result['after'], code)}"
-        )
-        if code != base:
-            print(
-                f"Оценочная стоимость покупки: "
-                f"{format_amount(result['cost'], base)} {base}"
-            )
+        _print_trade("Покупка", result, "cost", "Оценочная стоимость покупки")
 
     def _sell(self, args: argparse.Namespace) -> None:
         user = self._require_login()
         operation = usecases.sell if args.yes else confirmed_sell
         result = operation(user.user_id, args.currency, _parse_amount(args.amount))
         if result is None:
-            print(CANCELLED_MESSAGE)
+            _warn(CANCELLED_MESSAGE)
             return
-        code, base = result["currency"], result["base"]
-        line = f"Продажа выполнена: {format_amount(result['amount'], code)} {code}"
-        if code != base:
-            line += f" по курсу {format_rate(result['rate'])} {base}/{code}"
-        print(line)
-        print("Изменения в портфеле:")
-        print(
-            f"- {code}: было {format_amount(result['before'], code)} → "
-            f"стало {format_amount(result['after'], code)}"
-        )
-        if code != base:
-            print(
-                f"Оценочная выручка: {format_amount(result['revenue'], base)} {base}"
-            )
+        _print_trade("Продажа", result, "revenue", "Оценочная выручка")
 
     def _get_rate(self, args: argparse.Namespace) -> None:
         result = usecases.get_rate(args.from_code, args.to_code)
         src, dst = result["from"], result["to"]
+        rate = _paint(format_rate(result["rate"]), BOLD)
         print(
-            f"Курс {src}→{dst}: {format_rate(result['rate'])} "
+            f"Курс {src}→{dst}: {rate} "
             f"(обновлено: {format_timestamp(result['updated_at'])})"
         )
         print(f"Обратный курс {dst}→{src}: {format_rate(result['reverse_rate'])}")
@@ -276,9 +314,9 @@ class ValutaTradeCLI:
             result = usecases.update_rates(args.source)
         if result.errors:
             hint = parser_log_hint()
-            print(f"Update completed with errors. Check {hint} for details.")
+            _warn(f"Update completed with errors. Check {hint} for details.")
         else:
-            print(
+            _success(
                 f"Update successful. Total rates updated: {result.updated}. "
                 f"Last refresh: {result.last_refresh}"
             )
@@ -286,11 +324,15 @@ class ValutaTradeCLI:
     def _show_rates(self, args: argparse.Namespace) -> None:
         snapshot = usecases.get_rates_snapshot(args.currency, args.top, args.base)
         updated = format_timestamp(snapshot["last_refresh"])
-        print(f"Rates from cache (updated at {updated}):")
+        print(_paint(f"Rates from cache (updated at {updated}):", BOLD))
+        table = PrettyTable(["Пара", "Курс"])
+        table.align["Пара"] = "l"
+        table.align["Курс"] = "r"
         for pair, rate in snapshot["rows"]:
-            print(f"- {pair}: {format_rate(rate)}")
+            table.add_row([pair, format_rate(rate)])
+        print(table)
         if snapshot["stale"]:
-            print("Внимание: кеш устарел. Выполните 'update-rates'.")
+            _warn("Внимание: кеш устарел. Выполните 'update-rates'.")
 
     def _currencies(self, _args: argparse.Namespace) -> None:
         table = PrettyTable(["Код", "Описание"])
@@ -309,6 +351,7 @@ class ValutaTradeCLI:
 
 def main() -> None:
     """Точка входа CLI."""
+    _enable_ansi_on_windows()
     setup_logging()
     ValutaTradeCLI().run()
 

@@ -177,4 +177,4 @@ make lint             # ruff check
 
 ## Демо
 
-[Запись сессии на asciinema](https://asciinema.org/a/aMit9WsNEMqXugFu)
+[Запись сессии на asciinema](https://asciinema.org/a/BP8rWPlN6VU2nLmv)
