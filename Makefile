@@ -15,3 +15,6 @@ package-install:
 
 lint:
 	uv run ruff check .
+
+scheduler:
+	uv run python -m valutatrade_hub.parser_service.scheduler
