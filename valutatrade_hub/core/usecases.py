@@ -1,5 +1,6 @@
 """Бизнес-логика: регистрация, вход, операции с портфелем, курсы."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -111,13 +112,37 @@ def _refresh_rates() -> dict[str, Any]:
     return _db.load_rates()
 
 
-def _get_rates() -> tuple[dict[str, float], str | None]:
-    """Курсы из кеша rates.json; устаревший по TTL кеш обновляется."""
-    cache = _db.load_rates()
-    if not _is_fresh(cache.get("last_refresh")):
-        cache = _refresh_rates()
-    rates = {pair: info["rate"] for pair, info in cache["pairs"].items()}
-    return rates, cache.get("last_refresh")
+RatesSnapshot = tuple[dict[str, float], str | None]
+
+
+def _make_rates_cache() -> tuple[Callable[[], RatesSnapshot], Callable[[], None]]:
+    """Замыкание-кеш курсов: держит их в памяти, пока не истёк TTL.
+
+    Возвращает (get_rates, invalidate). rates.json перечитывается,
+    только когда кеш в памяти устарел или сброшен.
+    """
+    rates: dict[str, float] | None = None
+    last_refresh: str | None = None
+
+    def get_rates() -> RatesSnapshot:
+        nonlocal rates, last_refresh
+        if rates is not None and _is_fresh(last_refresh):
+            return rates, last_refresh
+        cache = _db.load_rates()
+        if not _is_fresh(cache.get("last_refresh")):
+            cache = _refresh_rates()
+        rates = {pair: info["rate"] for pair, info in cache["pairs"].items()}
+        last_refresh = cache.get("last_refresh")
+        return rates, last_refresh
+
+    def invalidate() -> None:
+        nonlocal rates
+        rates = None
+
+    return get_rates, invalidate
+
+
+_get_rates, _invalidate_rates_cache = _make_rates_cache()
 
 
 def get_rate(from_code: str, to_code: str) -> dict[str, Any]:
@@ -228,7 +253,9 @@ def sell(user_id: int, currency_code: str, amount: float) -> dict[str, Any]:
 
 def update_rates(source: str | None = None) -> UpdateResult:
     """Немедленное обновление курсов (все источники или один)."""
-    return RatesUpdater().run_update(source)
+    result = RatesUpdater().run_update(source)
+    _invalidate_rates_cache()
+    return result
 
 
 def get_rates_snapshot(
@@ -273,4 +300,19 @@ def get_rates_snapshot(
         "rows": items,
         "last_refresh": cache.get("last_refresh"),
         "stale": not _is_fresh(cache.get("last_refresh")),
+    }
+
+
+def estimate_trade(currency_code: str, amount: float) -> dict[str, Any]:
+    """Оценка сделки в базовой валюте (для подтверждения операции)."""
+    code = get_currency(currency_code).code
+    amount = validate_amount(amount)
+    base = _base_currency()
+    rate = 1.0 if code == base else get_rate(code, base)["rate"]
+    return {
+        "currency": code,
+        "amount": amount,
+        "base": base,
+        "rate": rate,
+        "total": amount * rate,
     }

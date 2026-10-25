@@ -14,6 +14,7 @@ from valutatrade_hub.core.exceptions import (
 )
 from valutatrade_hub.core.models import User
 from valutatrade_hub.core.utils import format_amount, format_rate, format_timestamp
+from valutatrade_hub.decorators import confirm_action
 from valutatrade_hub.logging_config import (
     console_logging,
     parser_log_hint,
@@ -29,8 +30,8 @@ COMMANDS_HELP = [
     ("register --username <имя> --password <пароль>", "Регистрация"),
     ("login --username <имя> --password <пароль>", "Вход"),
     ("show-portfolio [--base <код>]", "Портфель и его стоимость"),
-    ("buy --currency <код> --amount <кол-во>", "Покупка валюты"),
-    ("sell --currency <код> --amount <кол-во>", "Продажа валюты"),
+    ("buy --currency <код> --amount <кол-во> [--yes]", "Покупка валюты"),
+    ("sell --currency <код> --amount <кол-во> [--yes]", "Продажа валюты"),
     ("get-rate --from <код> --to <код>", "Текущий курс"),
     ("update-rates [--source coingecko|exchangerate]", "Обновить курсы из API"),
     ("show-rates [--currency <код>] [--top N] [--base <код>]", "Курсы из кеша"),
@@ -69,6 +70,7 @@ def build_parser() -> SilentArgumentParser:
         cmd = sub.add_parser(name, add_help=False)
         cmd.add_argument("--currency", required=True)
         cmd.add_argument("--amount", required=True)
+        cmd.add_argument("-y", "--yes", action="store_true")
 
     cmd = sub.add_parser("get-rate", add_help=False)
     cmd.add_argument("--from", dest="from_code", required=True)
@@ -97,6 +99,28 @@ def _parse_amount(raw: str) -> float:
 def _supported_codes() -> str:
     return ", ".join(c.code for c in usecases.list_supported_currencies())
 
+CANCELLED_MESSAGE = "Операция отменена."
+
+
+def _trade_question(verb: str, currency_code: str, amount: float) -> str:
+    quote = usecases.estimate_trade(currency_code, amount)
+    code, base = quote["currency"], quote["base"]
+    text = f"{verb} {format_amount(quote['amount'], code)} {code}"
+    if code != base:
+        text += f" ≈ {format_amount(quote['total'], base)} {base}"
+    return f"{text}?"
+
+
+def _buy_question(_user_id: int, currency_code: str, amount: float) -> str:
+    return _trade_question("Купить", currency_code, amount)
+
+
+def _sell_question(_user_id: int, currency_code: str, amount: float) -> str:
+    return _trade_question("Продать", currency_code, amount)
+
+
+confirmed_buy = confirm_action(_buy_question)(usecases.buy)
+confirmed_sell = confirm_action(_sell_question)(usecases.sell)
 
 class ValutaTradeCLI:
     """Интерактивная оболочка: разбирает команды и вызывает usecases."""
@@ -122,7 +146,9 @@ class ValutaTradeCLI:
         print(WELCOME)
         while True:
             try:
-                line = input(PROMPT).strip()
+                user = self._current_user
+                prompt = f"{user.username}{PROMPT}" if user else PROMPT
+                line = input(prompt).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
@@ -193,7 +219,11 @@ class ValutaTradeCLI:
 
     def _buy(self, args: argparse.Namespace) -> None:
         user = self._require_login()
-        result = usecases.buy(user.user_id, args.currency, _parse_amount(args.amount))
+        operation = usecases.buy if args.yes else confirmed_buy
+        result = operation(user.user_id, args.currency, _parse_amount(args.amount))
+        if result is None:
+            print(CANCELLED_MESSAGE)
+            return
         code, base = result["currency"], result["base"]
         line = f"Покупка выполнена: {format_amount(result['amount'], code)} {code}"
         if code != base:
@@ -212,7 +242,11 @@ class ValutaTradeCLI:
 
     def _sell(self, args: argparse.Namespace) -> None:
         user = self._require_login()
-        result = usecases.sell(user.user_id, args.currency, _parse_amount(args.amount))
+        operation = usecases.sell if args.yes else confirmed_sell
+        result = operation(user.user_id, args.currency, _parse_amount(args.amount))
+        if result is None:
+            print(CANCELLED_MESSAGE)
+            return
         code, base = result["currency"], result["base"]
         line = f"Продажа выполнена: {format_amount(result['amount'], code)} {code}"
         if code != base:

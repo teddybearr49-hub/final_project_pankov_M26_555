@@ -1,8 +1,9 @@
-"""Декоратор @log_action: логирование доменных операций."""
+"""Декораторы: @log_action (логирование) и @confirm_action (подтверждение yes/no)."""
 
 import functools
 import inspect
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -11,6 +12,8 @@ from valutatrade_hub.core.utils import format_rate
 logger = logging.getLogger("valutatrade.actions")
 
 Func = Callable[..., Any]
+YES_ANSWERS = frozenset({"yes", "y", "да", "д"})
+NO_ANSWERS = frozenset({"no", "n", "нет", "н"})
 
 
 def _fmt_number(value: Any, digits: int) -> str:
@@ -19,12 +22,17 @@ def _fmt_number(value: Any, digits: int) -> str:
     return repr(value)
 
 
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
 def _build_message(
     action: str,
     params: dict[str, Any],
     result: Any,
     verbose: bool,
     error: BaseException | None,
+    elapsed_ms: int,
 ) -> str:
     parts = [action]
     if params.get("username") is not None:
@@ -54,11 +62,12 @@ def _build_message(
             f"result=ERROR error_type={type(error).__name__} "
             f"error_message='{error}'"
         )
+    parts.append(f"duration_ms={elapsed_ms}")
     return " ".join(parts)
 
 
 def log_action(action: str, *, verbose: bool = False) -> Callable[[Func], Func]:
-    """Логирует вызов операции на уровне INFO.
+    """Логирует вызов операции на уровне INFO вместе со временем выполнения.
 
     Исключения не глотает: фиксирует в логе и пробрасывает дальше.
     verbose=True добавляет состояние кошелька «было→стало».
@@ -73,13 +82,51 @@ def log_action(action: str, *, verbose: bool = False) -> Callable[[Func], Func]:
                 params = dict(signature.bind_partial(*args, **kwargs).arguments)
             except TypeError:
                 params = {}
+            started = time.perf_counter()
             try:
                 result = func(*args, **kwargs)
             except Exception as exc:
-                logger.info(_build_message(action, params, None, verbose, exc))
+                elapsed = _elapsed_ms(started)
+                message = _build_message(action, params, None, verbose, exc, elapsed)
+                logger.info(message)
                 raise
-            logger.info(_build_message(action, params, result, verbose, None))
+            elapsed = _elapsed_ms(started)
+            message = _build_message(action, params, result, verbose, None, elapsed)
+            logger.info(message)
             return result
+
+        return wrapper
+
+    return decorator
+
+
+def confirm_action(question: Func) -> Callable[[Func], Func]:
+    """Запрашивает подтверждение (yes/no) перед выполнением операции.
+
+    question(*args, **kwargs) строит текст вопроса из аргументов операции.
+    При ответе no операция не выполняется и возвращается None;
+    на другой ввод вопрос повторяется. Если вопрос построить нельзя
+    (например, неверная валюта), операция вызывается сразу,
+    чтобы пользователь увидел её штатную ошибку.
+    """
+
+    def decorator(func: Func) -> Func:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                text = question(*args, **kwargs)
+            except Exception:
+                return func(*args, **kwargs)
+            while True:
+                try:
+                    answer = input(f"{text} (yes/no): ").strip().lower()
+                except EOFError:
+                    return None
+                if answer in YES_ANSWERS:
+                    return func(*args, **kwargs)
+                if answer in NO_ANSWERS:
+                    return None
+                print("Введите yes или no.")
 
         return wrapper
 
